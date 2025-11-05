@@ -75,6 +75,9 @@ class FlowFieldRenderer:
     ) -> None:
         """Draw the flow field as a PNG image and write it to ``output_path``."""
 
+        output_path = output_path.expanduser()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
         width, height = self.config.resolution
         xs, ys = self._seed_points()
 

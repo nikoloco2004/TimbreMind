@@ -54,6 +54,11 @@ def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if not args.input.exists():
+        parser.error(f"Input file {args.input} does not exist.")
+    if not args.input.is_file():
+        parser.error(f"Input path {args.input} is not a file.")
+
     config = FlowFieldConfig(
         seed=args.seed,
         resolution=tuple(args.resolution),
