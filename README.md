@@ -34,7 +34,7 @@ pip install -r requirements.txt
 
 The dependencies stay approachable: NumPy for numerical computations,
 SciPy for robust ``.wav`` loading, Matplotlib for rendering, and
-SimpleAudio for cross-platform playback inside the live viewer.
+Pygame for cross-platform playback inside the live viewer.
 
 ## Usage
 
@@ -65,6 +65,9 @@ The window is intentionally basic: a couple of buttons, a status label, and a
 Tkinter ``Canvas`` that redraws short line segments 30 times per second.  The
 heavy code comments in ``timbremind/ui.py`` walk through the full process so
 you can tweak the look without much prior GUI experience.
+
+Audio playback uses Pygame's mixer module, which ships as pre-built wheels on
+all major platforms so Windows users do not need to install extra compilers.
 
 The short line segments show the direction and energy of the flow.  Loud
 moments stretch the lines and make the field move faster, while bright

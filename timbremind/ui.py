@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
-import simpleaudio as sa
+import pygame
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -47,8 +47,9 @@ class FlowFieldViewer:
         self.normalised_rms: Optional[np.ndarray] = None  # loudness in the range [0, 1]
         self.normalised_centroid: Optional[np.ndarray] = None  # brightness in [0, 1]
 
-        # ``simpleaudio`` returns a ``PlayObject`` when audio is playing.
-        self.play_object: Optional[sa.PlayObject] = None
+        # ``pygame.mixer`` gives back ``Sound`` and ``Channel`` objects for playback.
+        self.sound: Optional[pygame.mixer.Sound] = None
+        self.channel: Optional[pygame.mixer.Channel] = None
         # ``is_playing`` mirrors the actual state so the UI can disable updates quickly.
         self.is_playing: bool = False
         # ``play_start`` stores the timestamp at which playback began, letting us estimate
@@ -198,7 +199,7 @@ class FlowFieldViewer:
                 )
         self.analysis_times = times
 
-        # Convert the floating point mono signal into 16-bit PCM expected by ``simpleaudio``.
+        # Convert the floating point mono signal into 16-bit PCM expected by ``pygame``.
         clipped = np.clip(features.signal, -1.0, 1.0)
         self.audio_buffer = (clipped * 32767).astype(np.int16)
 
@@ -214,12 +215,28 @@ class FlowFieldViewer:
         # Ensure there are no hanging sounds from a previous run.
         self.stop_playback()
 
-        self.play_object = sa.play_buffer(
-            self.audio_buffer,
-            num_channels=1,
-            bytes_per_sample=2,
-            sample_rate=self.features.sample_rate,
-        )
+        # ``pygame.mixer`` needs to be initialised with the correct audio format.
+        if pygame.mixer.get_init():
+            pygame.mixer.quit()
+        try:
+            pygame.mixer.init(
+                frequency=int(self.features.sample_rate),
+                size=-16,  # signed 16-bit samples
+                channels=1,
+            )
+        except pygame.error as exc:  # pragma: no cover - surface runtime error
+            messagebox.showerror("Audio error", f"Could not start playback:\n{exc}")
+            return
+
+        # Create a ``Sound`` object from the raw PCM bytes and start playing it.
+        self.sound = pygame.mixer.Sound(buffer=self.audio_buffer.tobytes())
+        self.channel = self.sound.play()
+        if self.channel is None:  # pragma: no cover - defensive guard
+            messagebox.showerror("Audio error", "Could not start playback.")
+            pygame.mixer.quit()
+            self.sound = None
+            return
+
         self.is_playing = True
         self.play_start = time.perf_counter()
         self.status_label.set("Playing...")
@@ -231,9 +248,12 @@ class FlowFieldViewer:
     def stop_playback(self) -> None:
         """Stop the current playback and freeze the animation."""
 
-        if self.play_object is not None:
-            self.play_object.stop()
-            self.play_object = None
+        if self.channel is not None:
+            self.channel.stop()
+            self.channel = None
+        self.sound = None
+        if pygame.mixer.get_init():
+            pygame.mixer.quit()
         if self.is_playing:
             self.status_label.set("Playback stopped.")
         self.is_playing = False
@@ -245,15 +265,15 @@ class FlowFieldViewer:
         if (
             not self.is_playing
             or self.features is None
-            or self.play_object is None
+            or self.channel is None
             or self.analysis_times is None
             or self.normalised_rms is None
             or self.normalised_centroid is None
         ):
             return
 
-        # ``simpleaudio`` exposes ``is_playing`` so we know when the sound is done.
-        if not self.play_object.is_playing():
+        # ``pygame`` exposes ``get_busy`` so we know when the sound is done.
+        if not self.channel.get_busy():
             self.finish_playback()
             return
 
@@ -307,7 +327,10 @@ class FlowFieldViewer:
         """Handle natural completion when the audio buffer runs out."""
 
         self.is_playing = False
-        self.play_object = None
+        self.channel = None
+        self.sound = None
+        if pygame.mixer.get_init():
+            pygame.mixer.quit()
         self.status_label.set("Playback finished.")
 
     # ---------------------------------------------------------------- utilities --
@@ -338,6 +361,8 @@ class FlowFieldViewer:
         """Make sure playback stops cleanly when the window is closed."""
 
         self.stop_playback()
+        if pygame.mixer.get_init():
+            pygame.mixer.quit()
         self.root.destroy()
 
 
