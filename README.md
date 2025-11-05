@@ -16,6 +16,8 @@ sound's loudness and brightness.
   in a fluid.
 - **Accessible CLI** – Generate artwork with a single command and tune
   parameters such as resolution, grid density, and random seed.
+- **Live visualiser** – A Tkinter screen lets you watch the Perlin field
+  react in real time while the audio plays.
 
 ## Requirements
 
@@ -30,9 +32,9 @@ source .venv/bin/activate  # On Windows use `.venv\\Scripts\\activate`
 pip install -r requirements.txt
 ```
 
-The dependencies are intentionally lightweight: NumPy for numerical
-computations, SciPy for robust ``.wav`` loading, and Matplotlib for the
-final render.
+The dependencies stay approachable: NumPy for numerical computations,
+SciPy for robust ``.wav`` loading, Matplotlib for rendering, and
+SimpleAudio for cross-platform playback inside the live viewer.
 
 ## Usage
 
@@ -45,6 +47,28 @@ final render.
 
 3. Inspect ``artwork.png`` to see the audio translated into flowing
    lines.
+
+### Live visualiser
+
+Prefer to experience the artwork as it evolves?  Launch the Tkinter
+interface:
+
+```bash
+python -m timbremind.ui
+```
+
+1. Click **Load WAV** and pick the file you want to explore.
+2. Press **Start** to play the audio and animate the flow field in real time.
+3. Use **Stop** to pause playback and freeze the current field state.
+
+The window is intentionally basic: a couple of buttons, a status label, and a
+Tkinter ``Canvas`` that redraws short line segments 30 times per second.  The
+heavy code comments in ``timbremind/ui.py`` walk through the full process so
+you can tweak the look without much prior GUI experience.
+
+The short line segments show the direction and energy of the flow.  Loud
+moments stretch the lines and make the field move faster, while bright
+timbres push the colours toward warm orange tones.
 
 ### Command line options
 
