@@ -28,6 +28,7 @@ class CanvasLine:
 
     item_id: int  # Tkinter integer handle returned by ``create_line``
     anchor: Tuple[float, float]  # fixed starting position of the line
+    offset: Tuple[float, float]  # tiny jitter added so nearby lines differ slightly
 
 
 class FlowFieldViewer:
@@ -66,6 +67,8 @@ class FlowFieldViewer:
         self.grid_columns = 18
         self.grid_rows = 12
         self.lines: List[CanvasLine] = []
+        # ``stream_steps`` controls how many curved points each line uses.
+        self.stream_steps = 6
         self._seed_lines()
 
         # The noise generator supplies the directions used by the flow field.
@@ -73,6 +76,10 @@ class FlowFieldViewer:
         # ``time_offset`` is incremented each frame to gently move the field even when
         # the audio is calm.
         self.time_offset = 0.0
+        # ``smoothed_*`` values gradually follow the live descriptors so the animation
+        # glides between changes instead of snapping to sudden differences.
+        self.smoothed_loudness = 0.0
+        self.smoothed_brightness = 0.0
 
     # ------------------------------------------------------------------ layout --
     def _build_controls(self) -> None:
@@ -140,22 +147,37 @@ class FlowFieldViewer:
         x_spacing = self.canvas_width / (self.grid_columns + 1)
         y_spacing = self.canvas_height / (self.grid_rows + 1)
 
+        rng = np.random.default_rng(42)
+
         for row in range(self.grid_rows):
             for col in range(self.grid_columns):
                 anchor_x = (col + 1) * x_spacing
                 anchor_y = (row + 1) * y_spacing
-                # Draw an initial short line.  The coordinates will be overwritten during
-                # the animation updates.
+
+                # ``smooth=True`` asks Tkinter to curve the line through the points we
+                # provide, producing a much softer flow than rigid straight segments.
+                initial_points: List[float] = []
+                for _ in range(self.stream_steps + 1):
+                    initial_points.extend([anchor_x, anchor_y])
                 item_id = self.canvas.create_line(
-                    anchor_x,
-                    anchor_y,
-                    anchor_x,
-                    anchor_y,
+                    *initial_points,
                     fill="#5555ff",
                     width=2,
                     capstyle=tk.ROUND,
+                    smooth=True,
+                    splinesteps=12,
                 )
-                self.lines.append(CanvasLine(item_id=item_id, anchor=(anchor_x, anchor_y)))
+
+                # Small offsets stop neighbouring lines from reusing the exact same noise
+                # coordinates, which would otherwise make the field look grid-like.
+                jitter = rng.uniform(-25.0, 25.0, size=2)
+                self.lines.append(
+                    CanvasLine(
+                        item_id=item_id,
+                        anchor=(anchor_x, anchor_y),
+                        offset=(float(jitter[0]), float(jitter[1])),
+                    )
+                )
 
     # -------------------------------------------------------------- user input --
     def choose_file(self) -> None:
@@ -241,6 +263,8 @@ class FlowFieldViewer:
         self.play_start = time.perf_counter()
         self.status_label.set("Playing...")
         self.time_offset = 0.0
+        self.smoothed_loudness = 0.0
+        self.smoothed_brightness = 0.0
 
         # Start the animation immediately.
         self.root.after(0, self.update_visual)
@@ -300,28 +324,44 @@ class FlowFieldViewer:
             )
         )
 
+        # Gradually blend descriptor values so the animation drifts smoothly.
+        self.smoothed_loudness = self._ease(self.smoothed_loudness, loudness, 0.22)
+        self.smoothed_brightness = self._ease(self.smoothed_brightness, brightness, 0.18)
+
         # Step the noise field.  Louder sounds push the flow faster.
-        self.time_offset += 0.03 + loudness * 0.15
-        base_scale = 0.012 + brightness * 0.02
-        line_length = 12 + loudness * 28
+        self.time_offset += 0.025 + self.smoothed_loudness * 0.12
+        base_scale = 0.010 + self.smoothed_brightness * 0.018
+        segment_length = 8.0 + self.smoothed_loudness * 22.0
 
         for entry in self.lines:
             start_x, start_y = entry.anchor
-            noise_value = float(
-                self.noise(
-                    np.array([start_x * base_scale]),
-                    np.array([(start_y + self.time_offset) * base_scale]),
-                )[0]
+            jitter_x, jitter_y = entry.offset
+
+            # ``points`` gathers the control vertices for the curved line.
+            points: List[float] = [start_x, start_y]
+            pos_x = start_x
+            pos_y = start_y
+
+            for _ in range(self.stream_steps):
+                sample_x = (pos_x + jitter_x) * base_scale
+                # ``time_offset`` only nudges the ``y`` input, creating a gentle drift.
+                sample_y = (pos_y + jitter_y + self.time_offset * 35.0) * base_scale
+                noise_value = float(self.noise(np.array([sample_x]), np.array([sample_y]))[0])
+                angle = noise_value * math.tau  # map [-1, 1] onto a full circle
+                pos_x += math.cos(angle) * segment_length
+                pos_y += math.sin(angle) * segment_length
+                points.extend([pos_x, pos_y])
+
+            colour = self._colour_from_brightness(self.smoothed_brightness)
+            self.canvas.coords(entry.item_id, *points)
+            self.canvas.itemconfigure(
+                entry.item_id,
+                fill=colour,
+                width=1.5 + self.smoothed_loudness * 2.5,
             )
-            # ``PerlinNoise`` returns values around [-1, 1].  Map that range onto full angles.
-            angle = (noise_value + 1.0) * math.pi
-            end_x = start_x + math.cos(angle) * line_length
-            end_y = start_y + math.sin(angle) * line_length
-            self.canvas.coords(entry.item_id, start_x, start_y, end_x, end_y)
-            self.canvas.itemconfigure(entry.item_id, fill=self._colour_from_brightness(brightness))
 
         # Schedule the next frame roughly 30 times per second.
-        self.root.after(33, self.update_visual)
+        self.root.after(16, self.update_visual)
 
     def finish_playback(self) -> None:
         """Handle natural completion when the audio buffer runs out."""
@@ -356,6 +396,12 @@ class FlowFieldViewer:
         end = np.array([255, 180, 60])
         rgb = (start + (end - start) * level).astype(int)
         return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
+
+    @staticmethod
+    def _ease(previous: float, target: float, factor: float) -> float:
+        """Return a value that moves ``previous`` towards ``target`` by ``factor``."""
+
+        return previous + (target - previous) * factor
 
     def on_close(self) -> None:
         """Make sure playback stops cleanly when the window is closed."""
